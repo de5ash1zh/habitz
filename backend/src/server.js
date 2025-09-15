@@ -13,12 +13,30 @@ dotenv.config();
 
 const app = express();
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || FRONTEND_URL)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 const MONGODB_URI = process.env.MONGODB_URI;
 const PORT = process.env.PORT || 3000;
 
+// Flexible CORS: supports comma-separated CORS_ORIGINS and wildcard subdomains like https://*.vercel.app
 app.use(
   cors({
-    origin: FRONTEND_URL,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // non-browser or same-origin
+      const ok = CORS_ORIGINS.some((allowed) => {
+        if (allowed === "*") return true;
+        if (allowed.startsWith("https://*.") || allowed.startsWith("http://*.")) {
+          const isHttps = allowed.startsWith("https://");
+          const suffix = allowed.replace(/^https?:\/\*\./, "");
+          const schemeOk = isHttps ? origin.startsWith("https://") : origin.startsWith("http://");
+          return schemeOk && origin.endsWith(suffix);
+        }
+        return origin === allowed;
+      });
+      return callback(ok ? null : new Error("Not allowed by CORS"), ok);
+    },
     credentials: true,
   })
 );
@@ -44,7 +62,7 @@ async function start() {
     await connectDB(MONGODB_URI);
     app.listen(PORT, () => {
       console.log(`Server running on http://localhost:${PORT}`);
-      console.log(`CORS origin: ${FRONTEND_URL}`);
+      console.log(`CORS origins: ${CORS_ORIGINS.join(", ")}`);
     });
   } catch (err) {
     console.error("Failed to start server due to DB connection error.");

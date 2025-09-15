@@ -6,6 +6,10 @@ import crypto from "crypto";
 
 const CSRF_COOKIE = "csrfToken";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 function parseCookies(header) {
   const list = {};
@@ -23,6 +27,7 @@ export function csrfMiddleware(req, res, next) {
   try {
     const cookies = parseCookies(req.headers["cookie"]);
     let token = cookies[CSRF_COOKIE];
+    const origin = req.headers["origin"];
 
     // Set token if missing
     if (!token) {
@@ -37,9 +42,24 @@ export function csrfMiddleware(req, res, next) {
     }
 
     if (!SAFE_METHODS.has(req.method)) {
-      const headerToken = req.headers["x-csrf-token"]; // case-insensitive access normalized
-      if (!headerToken || headerToken !== token) {
-        return res.status(403).json({ message: "CSRF token invalid or missing" });
+      // In production, if request comes from a trusted, explicitly allowed Origin (via CORS_ORIGINS),
+      // and cookies are httpOnly+secure, relax CSRF validation (defense is Origin+Credentials).
+      const isTrustedOrigin = process.env.NODE_ENV === "production" && origin && ALLOWED_ORIGINS.some((allowed) => {
+        if (allowed === "*") return true;
+        if (allowed.startsWith("https://*.") || allowed.startsWith("http://*.") ) {
+          const isHttps = allowed.startsWith("https://");
+          const suffix = allowed.replace(/^https?:\/\*\./, "");
+          const schemeOk = isHttps ? origin.startsWith("https://") : origin.startsWith("http://");
+          return schemeOk && origin.endsWith(suffix);
+        }
+        return origin === allowed;
+      });
+
+      if (!isTrustedOrigin) {
+        const headerToken = req.headers["x-csrf-token"]; // case-insensitive
+        if (!headerToken || headerToken !== token) {
+          return res.status(403).json({ message: "CSRF token invalid or missing" });
+        }
       }
     }
 
